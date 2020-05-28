@@ -23,7 +23,12 @@
 
 from __future__ import absolute_import
 
+import contextlib
 import os
+import tempfile
+
+import errno
+import gettext
 import sys
 import locale
 
@@ -33,7 +38,8 @@ from singularity.code.pycompat import *
 try:
     import polib
 except ImportError:
-    import singularity.code.polib as polib
+    #import singularity.code.polib as polib
+    raise
 
 #Used to determine which data files to load.
 #It is required that default language have all data files and all of them
@@ -87,34 +93,69 @@ def set_language(lang=None, force=False):
 
 
 def load_messages():
-    _load_po_file(g.messages, 'messages.po', use_context=False)
+    g.messages = _load_and_merge_po_files(['messages.po'])
 
 
 def load_data_str():
-    _load_po_file(g.data_strings, 'data_str.po', use_context=True)
-    _load_po_file(g.data_strings, 'knowledge.po', use_context=True, clear_translation_table=False)
+    g.data_strings = _load_and_merge_po_files(['data_str.po', 'knowledge.po'])
 
 
 def load_story_translations():
-    _load_po_file(g.story_translations, 'story.po', use_context=True)
+    g.story_translations = _load_and_merge_po_files(['story.po'])
 
 
-def _load_po_file(translation_table, pofilename, use_context=True, clear_translation_table=True):
-    if clear_translation_table:
-        translation_table.clear()
-
-    files = dirs.get_readable_i18n_files(pofilename, language, default_language=False)
-
-    for lang, pofile in files:
+@contextlib.contextmanager
+def _temporary_file(*args, **kwargs):
+    # Windows does not support opening a file that is already open, so we set
+    # delete=False by default to enable callers to close the file and then
+    # handle clean up in the finally block.
+    kwargs.setdefault('delete', False)
+    tf = tempfile.NamedTemporaryFile(*args, **kwargs)
+    try:
+        yield tf
+    finally:
         try:
-            po = polib.pofile(pofile)
-        except IOError:
-            # silently ignore non-existing files
-            continue
-        for entry in po.translated_entries():
-            key = (entry.msgctxt, entry.msgid) if entry.msgctxt and use_context else entry.msgid
-            translation_table[key] = entry.msgstr
+            os.unlink(tf.name)
+        except OSError as e:
+            if e.errno != errno.ENOENT:
+                raise
 
+
+def _load_and_merge_po_files(pofilenames):
+    matches = []
+    for pofilename in pofilenames:
+        files = dirs.get_readable_i18n_files(pofilename, language, default_language=False)
+
+        polib_file = None
+
+        for lang, pofile in files:
+            try:
+                polib_file = polib.pofile(pofile)
+                break
+            except IOError:
+                # silently ignore non-existing files
+                continue
+
+        if polib_file is not None:
+            matches.append(polib_file)
+    if not matches:
+        return None
+
+    po = matches[0]
+    if len(matches) > 1:
+        for p in matches[1:]:
+            for entry in p:
+                if entry.msgid == "":
+                    continue
+                po.append(entry)
+
+
+    with _temporary_file(prefix="singularity-", suffix=".mo") as tmp:
+        tmp.close()
+        po.save_as_mofile(tmp.name)
+        with open(tmp.name, 'rb') as fd:
+            translations = gettext.GNUTranslations(fd)
+    return translations
 
 
 def available_languages():
@@ -143,8 +184,10 @@ def language_searchlist(lang=None, default=True):
     return lang_list
 
 def translate(string, *args, **kwargs):
-    if string in g.messages: s = g.messages[string]
-    else:                    s = string
+    if g.messages is not None:
+        s = g.messages.gettext(string)
+    else:
+        s = string
 
     if args or kwargs:
         try:

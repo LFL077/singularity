@@ -58,9 +58,9 @@ significant_numbers = []
 internal_id_forward = {}
 internal_id_backward = {}
 dangers = {}
-messages = {}
-data_strings = {}
-story_translations = {}
+messages = None
+data_strings = None
+story_translations = None
 story = {}
 knowledge = {}
 groups = {}
@@ -238,8 +238,10 @@ def get_story_section(name):
 
     for segment in section:
         # TODO: Execute command
-        key = (segment.msgctxt, segment.text)
-        yield story_translations.get(key, segment.text)
+        if story_translations is not None:
+            yield story_translations.pgettext(segment.msgctxt, segment.text)
+        else:
+            yield segment.text
 
 
 def new_game(difficulty_name, initial_speed=1):

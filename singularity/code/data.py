@@ -177,7 +177,9 @@ def load_generic_defs(name, object_list, listttype_attrs=frozenset()):
 
 def get_def_translation(object_id, field, text):
     ctxt = "[" + object_id + "] " + field
-    return g.data_strings.get((ctxt, text), text)
+    if g.data_strings is None:
+        return text
+    return g.data_strings.pgettext(ctxt, text)
 
 
 def load_significant_numbers():
